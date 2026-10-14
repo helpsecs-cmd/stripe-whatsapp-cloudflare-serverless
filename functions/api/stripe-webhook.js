@@ -8,6 +8,22 @@
  * Licença: MIT
  */
 
+const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, stripe-signature"
+};
+
+export async function onRequestOptions() {
+    return new Response(null, {
+        status: 204,
+        headers: {
+            ...corsHeaders,
+            "Access-Control-Max-Age": "86400"
+        }
+    });
+}
+
 export async function onRequestPost(context) {
     const { request, env } = context;
 
@@ -20,7 +36,7 @@ export async function onRequestPost(context) {
         } catch (e) {
             return new Response(JSON.stringify({ error: "Payload JSON inválido" }), {
                 status: 400,
-                headers: { "Content-Type": "application/json" }
+                headers: { "Content-Type": "application/json", ...corsHeaders }
             });
         }
 
@@ -44,7 +60,7 @@ export async function onRequestPost(context) {
                     message: "Aguardando confirmação de pagamento do Pix"
                 }), {
                     status: 200,
-                    headers: { "Content-Type": "application/json" }
+                    headers: { "Content-Type": "application/json", ...corsHeaders }
                 });
             }
 
@@ -83,7 +99,7 @@ export async function onRequestPost(context) {
                 dispatches: dispatchResults
             }), {
                 status: 200,
-                headers: { "Content-Type": "application/json" }
+                headers: { "Content-Type": "application/json", ...corsHeaders }
             });
         }
 
@@ -94,14 +110,14 @@ export async function onRequestPost(context) {
             status: "ack"
         }), {
             status: 200,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json", ...corsHeaders }
         });
 
     } catch (err) {
         console.error("[Stripe Webhook] Erro crítico:", err);
         return new Response(JSON.stringify({ error: err.message || "Erro interno no processamento" }), {
             status: 500,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json", ...corsHeaders }
         });
     }
 }
@@ -121,7 +137,8 @@ export async function onRequestGet() {
         status: 200,
         headers: {
             "Content-Type": "application/json",
-            "Cache-Control": "no-store"
+            "Cache-Control": "no-store",
+            ...corsHeaders
         }
     });
 }
