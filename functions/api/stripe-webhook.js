@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Real Make IA — Webhook Serverless: Stripe -> WhatsApp do Vendedor (Multi-Adaptador)
- * Arquitetura Serverless Cloudflare Pages Function
+ * Arquitetura Serverless Cloudflare Pages Function com Blindagem Criptográfica HMAC-SHA256
  * Endpoint: https://realmakeia.com/api/stripe-webhook
  * 
  * Holding HELPSECS LTDA
@@ -11,8 +11,107 @@
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, stripe-signature"
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, stripe-signature, Stripe-Signature"
 };
+
+// Cache de idempotência em memória por isolate (anti-duplicação de rajadas de rede)
+const processedEvents = new Set();
+
+function isEventProcessed(eventId) {
+    if (!eventId) return false;
+    return processedEvents.has(eventId);
+}
+
+function markEventProcessed(eventId) {
+    if (!eventId) return;
+    if (processedEvents.size > 2000) {
+        processedEvents.clear();
+    }
+    processedEvents.add(eventId);
+}
+
+/**
+ * Validação Criptográfica HMAC-SHA256 Oficial do Stripe usando Web Crypto API pura.
+ * Zero dependências de NPM — executa nativamente em tempo real no Edge da Cloudflare.
+ */
+async function verifyStripeSignature(rawBody, signatureHeader, secret) {
+    if (!signatureHeader || !secret) {
+        return { valid: false, error: "Cabeçalho Stripe-Signature ou Secret ausente" };
+    }
+
+    const parts = signatureHeader.split(",");
+    let timestamp = null;
+    const signatures = [];
+
+    for (const part of parts) {
+        const [k, v] = part.trim().split("=");
+        if (k === "t") timestamp = parseInt(v, 10);
+        if (k === "v1") signatures.push(v);
+    }
+
+    if (!timestamp || signatures.length === 0) {
+        return { valid: false, error: "Formato inválido do cabeçalho Stripe-Signature" };
+    }
+
+    // 1. Proteção Anti-Replay: janela estrita de 300 segundos (±5 minutos)
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - timestamp) > 300) {
+        return { 
+            valid: false, 
+            error: `Timestamp fora da janela de tolerância de 300s (recebido: ${timestamp}, atual: ${now})` 
+        };
+    }
+
+    // 2. Monta o payload assinado no padrão oficial: `${timestamp}.${rawBody}`
+    const signedPayload = `${timestamp}.${rawBody}`;
+    const encoder = new TextEncoder();
+
+    try {
+        const keyData = encoder.encode(secret);
+        const cryptoKey = await crypto.subtle.importKey(
+            "raw",
+            keyData,
+            { name: "HMAC", hash: "SHA-256" },
+            false,
+            ["sign"]
+        );
+
+        const signatureBuffer = await crypto.subtle.sign(
+            "HMAC",
+            cryptoKey,
+            encoder.encode(signedPayload)
+        );
+
+        const hashArray = Array.from(new Uint8Array(signatureBuffer));
+        const expectedSignature = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+        // 3. Comparação de tempo constante (anti-timing attacks)
+        let match = false;
+        for (const sig of signatures) {
+            if (timingSafeEqual(expectedSignature, sig)) {
+                match = true;
+                break;
+            }
+        }
+
+        if (!match) {
+            return { valid: false, error: "Assinatura HMAC-SHA256 não confere com o payload" };
+        }
+
+        return { valid: true, timestamp };
+    } catch (e) {
+        return { valid: false, error: `Erro na execução criptográfica: ${e.message}` };
+    }
+}
+
+function timingSafeEqual(a, b) {
+    if (a.length !== b.length) return false;
+    let result = 0;
+    for (let i = 0; i < a.length; i++) {
+        result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return result === 0;
+}
 
 export async function onRequestOptions() {
     return new Response(null, {
@@ -29,19 +128,60 @@ export async function onRequestPost(context) {
 
     try {
         const payloadText = await request.text();
-        let event;
+        const signatureHeader = request.headers.get("stripe-signature") || request.headers.get("Stripe-Signature");
+        const webhookSecret = env?.STRIPE_WEBHOOK_SECRET || "whsec_ZbEvVLgAfPLelBmWNZh0eXLMIfm7qdSV";
 
-        try {
-            event = JSON.parse(payloadText);
-        } catch (e) {
-            return new Response(JSON.stringify({ error: "Payload JSON inválido" }), {
+        // BLINDAGEM 1: Exigência e Validação Criptográfica de Assinatura
+        if (!signatureHeader) {
+            console.warn("[Stripe Webhook] ALERTA DE SEGURANÇA: Requisição POST rejeitada sem cabeçalho Stripe-Signature.");
+            return new Response(JSON.stringify({ 
+                error: "Acesso negado: cabeçalho Stripe-Signature ausente. Requisições forjadas são bloqueadas.",
+                status: "rejected_unauthorized"
+            }), {
                 status: 400,
                 headers: { "Content-Type": "application/json", ...corsHeaders }
             });
         }
 
+        const sigVerification = await verifyStripeSignature(payloadText, signatureHeader, webhookSecret);
+        if (!sigVerification.valid) {
+            console.warn(`[Stripe Webhook] ALERTA DE SEGURANÇA: Assinatura inválida: ${sigVerification.error}`);
+            return new Response(JSON.stringify({ 
+                error: `Assinatura inválida: ${sigVerification.error}`,
+                status: "rejected_bad_signature"
+            }), {
+                status: 400,
+                headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+        }
+
+        let event;
+        try {
+            event = JSON.parse(payloadText);
+        } catch (e) {
+            return new Response(JSON.stringify({ error: "Payload JSON malformado" }), {
+                status: 400,
+                headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+        }
+
+        const eventId = event.id || "";
         const eventType = event.type || "";
-        console.log(`[Stripe Webhook] Evento recebido: ${eventType} (ID: ${event.id || "sem_id"})`);
+        console.log(`[Stripe Webhook] Evento autenticado com sucesso: ${eventType} (ID: ${eventId})`);
+
+        // BLINDAGEM 2: Idempotência / Anti-Duplicidade
+        if (isEventProcessed(eventId)) {
+            console.log(`[Stripe Webhook] Evento duplicado já processado (${eventId}). Retornando 200 OK sem disparar duplicatas.`);
+            return new Response(JSON.stringify({
+                received: true,
+                event: eventId,
+                status: "idempotent_duplicate_ignored"
+            }), {
+                status: 200,
+                headers: { "Content-Type": "application/json", ...corsHeaders }
+            });
+        }
+        markEventProcessed(eventId);
 
         // Processa eventos onde o pagamento está formalmente confirmado
         // 1. checkout.session.completed (Cartão imediato ou Pix pago na hora)
@@ -50,14 +190,13 @@ export async function onRequestPost(context) {
             const session = event.data?.object || {};
             const paymentStatus = session.payment_status || "";
 
-            // DOUTRINA DO PIX: Só notifica se o status for estritamente "paid"!
-            // Se o cliente apenas abriu o checkout e gerou o Pix sem pagar, status = "unpaid".
+            // BLINDAGEM 3: DOUTRINA DO PIX — Só notifica se payment_status === 'paid'
             if (paymentStatus !== "paid") {
-                console.log(`[Stripe Webhook] Sessão ${session.id} ignorada para notificação: payment_status é '${paymentStatus}' (não pago ainda).`);
+                console.log(`[Stripe Webhook] Sessão ${session.id} ignorada para WhatsApp: status é '${paymentStatus}' (Pix não pago).`);
                 return new Response(JSON.stringify({
                     received: true,
                     status: "ignored_unpaid",
-                    message: "Aguardando confirmação de pagamento do Pix"
+                    message: "Aguardando compensação do Pix. Nenhum alerta falso disparado."
                 }), {
                     status: 200,
                     headers: { "Content-Type": "application/json", ...corsHeaders }
@@ -72,7 +211,6 @@ export async function onRequestPost(context) {
             const paymentMethods = (session.payment_method_types || []).join(", ") || "Pix/Cartão";
             const sessionId = session.id || "cs_live_...";
 
-            // Monta a mensagem estruturada para o WhatsApp
             const zapMessage = 
 `🔔 *VENDA APROVADA — Real Make IA!*
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -96,6 +234,7 @@ export async function onRequestPost(context) {
                 event: eventType,
                 payment_status: paymentStatus,
                 customer: customerEmail,
+                authenticated: true,
                 dispatches: dispatchResults
             }), {
                 status: 200,
@@ -107,6 +246,7 @@ export async function onRequestPost(context) {
         return new Response(JSON.stringify({
             received: true,
             event: eventType,
+            authenticated: true,
             status: "ack"
         }), {
             status: 200,
@@ -127,8 +267,13 @@ export async function onRequestGet() {
     return new Response(JSON.stringify({
         status: "online",
         service: "Real Make IA — Stripe to WhatsApp Webhook Serverless",
-        version: "2.0.0-multi-adapter",
-        architecture: "Cloudflare Pages Functions (Edge Serverless R$ 0/mês)",
+        version: "3.0.0-sealed-security",
+        security: {
+            signature_verification: "HMAC-SHA256 (Web Crypto API)",
+            anti_replay_window: "±300 seconds",
+            idempotency_dedup: "Active (In-Memory Isolate)",
+            pix_doctrine: "Strict payment_status === 'paid'"
+        },
         supported_providers: ["callmebot", "evolution_api", "zapi", "generic_webhook"],
         endpoint: "https://realmakeia.com/api/stripe-webhook",
         docs: "https://realmakeia.com/webhook-stripe-whatsapp-serverless/",
@@ -175,8 +320,8 @@ async function despacharNotificacao(mensagem, sessionData, env) {
                 headers: { "Content-Type": "application/json", "apikey": evoKey },
                 body: JSON.stringify({ number: sellerNumber.replace(/\D/g, ""), text: mensagem })
             })
-            .then(r => resultados.push({ provider: "evolution_api", status: r.status }))
-            .catch(e => resultados.push({ provider: "evolution_api", error: String(e) }))
+                .then(r => resultados.push({ provider: "evolution_api", status: r.status }))
+                .catch(e => resultados.push({ provider: "evolution_api", error: String(e) }))
         );
     }
 
