@@ -1,127 +1,24 @@
-# ⚡ Stripe to WhatsApp Serverless (Multi-Adapter)
+# ⚡ Stripe Webhook -> WhatsApp em 184ms (Cloudflare Pages Serverless + Web Crypto API)
 
-> Notificação em tempo real de vendas e checkouts do **Stripe (Pix e Cartão)** diretamente no **WhatsApp do Vendedor**, rodando 100% serverless na borda da **Cloudflare Pages (R$ 0/mês)**.
-
-Desenvolvido e mantido pela equipe de engenharia da **[Real Make IA](https://realmakeia.com)** e **HELPSECS LTDA**.
-
----
-
-## 🎯 Por que este projeto existe?
-
-A maioria dos infoprodutores e desenvolvedores que vendem produtos digitais de ticket acessível (R$ 19 a R$ 97) se depara com um dilema:
-1. **Pagar R$ 50 a R$ 150/mês** em ferramentas no-code (Make, Zapier) apenas para encaminhar um webhook para o WhatsApp;
-2. **Manter uma VPS ligada 24/7 (R$ 30 a R$ 60/mês)** rodando n8n ou instâncias pesadas de Docker só para esperar eventos esporádicos;
-3. **Cair na 'Armadilha do Pix':** bots amadores que notificam o evento `checkout.session.completed` assim que o cliente gera o QR Code, comemorando vendas que na verdade **não foram pagas** (`unpaid`).
-
-Esta solução resolve tudo isso de forma elegante: roda em **Cloudflare Pages Functions** (Edge Serverless com latência < 150ms), possui custo de infraestrutura de **R$ 0/mês** e suporta múltiplos adaptadores de WhatsApp em paralelo.
+> 🔥 **NOVO DOSSIÊ DE ENGENHARIA (Outubro/2026):**
+> Além da arquitetura Serverless de pagamentos e alertas no WhatsApp em 184ms, publicamos o pipeline completo da nossa **Fábrica de Vídeo Vertical em Python (`FFmpeg Zoompan 2160x3840 + Legendas .ASS`)**:
+> - 🎬 **[Dossiê + Compilador Online: Engenharia de Vídeo Vertical em Python (FFmpeg Zoompan + .ASS)](https://realmakeia.com/engenharia-video-vertical-ffmpeg-zoompan-legendas-ass-python/?utm_source=github&utm_medium=readme&utm_campaign=stripe_wa_repo)**
+> - 🔐 **[Artigo Completo desta Arquitetura: Stripe no WhatsApp sem VPS (Cloudflare Edge + HMAC-SHA256)](https://realmakeia.com/webhook-stripe-whatsapp-serverless/?utm_source=github&utm_medium=readme&utm_campaign=stripe_wa_repo)**
+> - 📦 **[Adquirir o Pacote Completo da Fábrica v2.0 (Scripts Python + 20 Roteiros Validados — R$ 27,00 via Pix/Stripe)](https://buy.stripe.com/3cIdRbevndBwdYc35qebu03)**
 
 ---
 
-## 🏗️ Arquitetura do Sistema
+## O Que é Este Repositório?
 
-```text
-       Cliente paga via Pix ou Cartão
-                     │
-                     ▼
-             Gateway Stripe
-                     │
-                     ▼ (Webhook POST /api/stripe-webhook)
-     ┌──────────────────────────────────────┐
-     │  Cloudflare Pages Edge Function      │
-     │  - Filtra: payment_status === 'paid' │
-     │  - Trata Pix Imediato e Assíncrono  │
-     │  - Formata mensagem rica com emojis │
-     └──────────────────┬───────────────────┘
-                        │
-       ┌────────────────┴────────────────────────┐
-       │     DISPACHO MULTI-ADAPTADOR            │
-       ▼                                         ▼
-[Modo 1: CallMeBot]                    [Modo 2: Evolution API]
-• R$ 0 / Zero Servidor                 • Self-hosted / Docker
-• Direto no WhatsApp                   • POST /message/sendText
-       │                                         │
-       ▼                                         ▼
-[Modo 3: Z-API]                        [Modo 4: Webhook Genérico]
-• Gateway Comercial                    • n8n, Make, Discord, Telegram
-```
+Uma implementação real em produção (zero dependências NPM, rodando puro em V8 Isolates no Cloudflare Pages Functions) que:
+1. Valida a assinatura criptográfica `Stripe-Signature` (`HMAC-SHA256`) usando a **Web Crypto API** nativa (`crypto.subtle`) com proteção contra *timing attacks* e *replay attacks* (janela de 300s).
+2. Libera o download protegido por paywall (`HTTP 403` para não-pagantes) verificando o `checkout.session` direto na API da Stripe.
+3. Dispara em **184 milissegundos** uma notificação detalhada no WhatsApp via gateway Baileys/Evolution API usando `context.waitUntil()` sem bloquear a resposta HTTP 200 para a Stripe.
+
+## Arquitetura Completa e Testes Adversários
+
+Leia o estudo completo com os testes de segurança adversária (forja de assinatura, replay de timestamp, bypass de diretório) em:
+👉 **[https://realmakeia.com/webhook-stripe-whatsapp-serverless/](https://realmakeia.com/webhook-stripe-whatsapp-serverless/?utm_source=github&utm_medium=readme&utm_campaign=stripe_wa_repo)**
 
 ---
-
-## 🚀 Adaptadores Suportados
-
-| Adaptador | Custo | Infraestrutura Necessária | Caso de Uso |
-|---|---|---|---|
-| **CallMeBot API** | **R$ 0/mês** | **Nenhuma** (Zero Servidor) | Ideal para criadores individuais que querem receber no WhatsApp pessoal imediatamente. |
-| **Evolution API** | R$ 0 (Self-hosted) | VPS / Docker | Ideal para agências e equipes que já possuem infraestrutura própria de WhatsApp. |
-| **Z-API** | Mensalidade Z-API | SaaS | Para quem usa Z-API em esteiras corporativas. |
-| **Custom Webhook** | R$ 0 | n8n / Make / Discord | Para repassar o evento padronizado para qualquer outro ecossistema. |
-
----
-
-## 📦 Como Instalar e Rodar
-
-### 1. Clonar ou copiar a função
-Copie o arquivo `functions/api/stripe-webhook.js` para a pasta `functions/api/` do seu projeto no **Cloudflare Pages**.
-
-### 2. Configurar as Variáveis de Ambiente
-No painel da Cloudflare (*Workers & Pages -> Settings -> Environment Variables*), adicione conforme o seu provedor escolhido:
-
-```bash
-# Número do WhatsApp que receberá os alertas (com DDI e DDD)
-SELLER_WHATSAPP="5511999998888"
-
-# SE USAR CALLMEBOT (R$ 0 / Grátis):
-# Obtenha sua chave gratuita enviando "I allow callmebot to send me messages" para o bot do CallMeBot no WhatsApp
-CALLMEBOT_API_KEY="sua_chave_aqui"
-
-# SE USAR EVOLUTION API:
-EVOLUTION_API_URL="https://sua-evolution.com"
-EVOLUTION_API_KEY="sua_chave_global"
-EVOLUTION_INSTANCE="nome_da_instancia"
-
-# SE USAR Z-API:
-ZAPI_INSTANCE_ID="seu_instance_id"
-ZAPI_TOKEN="seu_token"
-
-# SE USAR WEBHOOK GENÉRICO (n8n, Make, Telegram):
-ZAP_WEBHOOK_URL="https://seu-n8n.com/webhook/stripe-vendas"
-```
-
-### 3. Cadastrar o Webhook no Stripe
-1. Acesse o **Stripe Dashboard -> Desenvolvedores -> Webhooks -> Adicionar Endpoint**.
-2. URL do endpoint: `https://seu-dominio.com/api/stripe-webhook`
-3. Eventos para escutar:
-   * `checkout.session.completed`
-   * `checkout.session.async_payment_succeeded`
-
----
-
-## 🧪 Como Testar Localmente / Remotamente
-
-Utilize o script de teste incluído:
-
-```bash
-python testar_webhook.py --url https://seu-dominio.com/api/stripe-webhook
-```
-
-O script dispara uma simulação fiel de evento com Pix aprovado e valida o retorno HTTP 200.
-
----
-
-## 🛡️ A Doutrina do Pix (Prevenção de Falsos Positivos)
-
-```javascript
-// Trecho extraído de functions/api/stripe-webhook.js
-if (paymentStatus !== "paid") {
-    console.log(`Sessão ignorada: status é '${paymentStatus}'. Aguardando pagamento real do Pix.`);
-    return new Response(JSON.stringify({ status: "ignored_unpaid" }), { status: 200 });
-}
-```
-
-O código ignora quando o cliente gera o Pix e sai da tela. O alerta só dispara quando o dinheiro é compensado!
-
----
-
-## 📄 Licença
-
-Distribuído sob licença MIT. Desenvolvido por **[HELPSECS LTDA](https://realmakeia.com)**.
+*Mantido por [Real Make IA](https://realmakeia.com) · HELPSECS LTDA.*
