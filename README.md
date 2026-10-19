@@ -1,10 +1,12 @@
 <!-- CTA-REALMAKEIA-INI -->
 > **⚡ Quer isto funcionando na sua máquina em 10 minutos?**
-> O código deste repositório está empacotado, testado e documentado no **Kit Fábrica de Vídeos v2.0** — R$ 27, pagamento único, entrega imediata.
+> O código completo está empacotado, testado e com entrega imediata (`.ZIP` liberado na hora após Pix ou Cartão):
 >
-> ### **[→ Comprar Kit Fábrica de Vídeos v2.0 por R$ 27](https://buy.stripe.com/3cIdRbevndBwdYc35qebu03)**
+> - 🔥 **[Porta de Entrada — Kit Estúdio Google Flow Veo 3.1: R$ 19,90](https://buy.stripe.com/cNi3cxgDv40W8DS5dyebu06)** *(Bíblia 37s + Blueprint JSON + Montador Python)*
+> - 📦 **[Comprar Kit Fábrica de Vídeos v2.0: R$ 27](https://buy.stripe.com/3cIdRbevndBwdYc35qebu03)**
+> - 🚀 **[Levar Combo Full-Stack 2-em-1 (Vídeos + Flow + Gateway WhatsApp): R$ 47](https://buy.stripe.com/9B63cxevndBwcU80Xiebu05)**
 >
-> [Dossiês técnicos e documentação](https://realmakeia.com/criar-videos-curtos-ia-sem-aparecer/?utm_source=github&utm_medium=readme&utm_campaign=stripe-whatsapp-cloudflare-serverless) · Dúvidas no [WhatsApp](https://wa.me/5547999835120)
+> [Ver demonstração de 37s em realmakeia.com](https://realmakeia.com/?utm_source=github&utm_medium=readme&utm_campaign=stripe-whatsapp-cloudflare-serverless) · [Dossiê Técnico](https://realmakeia.com/criar-videos-curtos-ia-sem-aparecer/?utm_source=github&utm_medium=readme&utm_campaign=stripe-whatsapp-cloudflare-serverless) · Dúvidas no [WhatsApp (Resposta em 3s)](https://wa.me/5547999835120?text=Ol%C3%A1%21%20Vim%20do%20GitHub%20e%20quero%20saber%20sobre%20os%20Deploy%20Kits.)
 <!-- CTA-REALMAKEIA-FIM -->
 
 # ⚡ Stripe Webhook -> WhatsApp em 184ms (Cloudflare Pages Serverless + Web Crypto API)
